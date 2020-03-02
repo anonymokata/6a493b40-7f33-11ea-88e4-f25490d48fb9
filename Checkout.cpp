@@ -73,6 +73,7 @@ public:
     ~CheckoutTotal();
 
     void AddItem( ItemConfigurationData * itemConfigData, const string& itemName, unsigned int quantity );
+    bool RemoveItem( ItemConfigurationData * itemConfigData, string itemName, unsigned int quantity );
     unsigned int GetCheckoutTotal( void ) { return checkoutTotal; }
     void ClearData( void );
 
@@ -119,7 +120,7 @@ private:
     vector< tuple <string, ITEM_UNITS_T, unsigned int> > * itemConfigTestDataVector;
 
     // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
-    vector< tuple <string, unsigned int, unsigned int> > * checkoutTotalTestDataVector;
+    vector< tuple <string, bool, unsigned int, unsigned int> > * checkoutTotalTestDataVector;
 
     bool ActualVsExpected( const string& itemName, const string& paramName, unsigned int expected, unsigned int actual );
     void DisplayTestResultsBanner( const string& title );
@@ -137,7 +138,7 @@ bool ValidateNumericEntryString( const string& inLine, unsigned int * outVal, un
 bool ReadPriceParam( unsigned int * inVal, const string& inBuf, const string& paramName );
 bool ReadQuantityParam( unsigned int * inVal, ITEM_UNITS_T units, const string& paramName, unsigned int lowLimit = QUANTITY_LOW_LIMIT );
 void ReadItemConfiguration( ItemConfigurationData * itemConfigurationData );
-void ReadCheckoutItemAdd( ItemConfigurationData * itemConfigurationData, CheckoutTotal * checkoutTotal );
+void ReadCheckoutItemAddRemove( ItemConfigurationData * itemConfigurationData, CheckoutTotal * checkoutTotal, bool isAdd );
 string CentsToDollarsString( unsigned int cents );
 
 
@@ -163,7 +164,9 @@ int main( void )
         else if ( inBuf1 == "lc" ) // listconfig
             itemConfigurationData->DisplayItemConfigurationData();
         else if ( inBuf1 == "ai" ) // additem
-            ReadCheckoutItemAdd( itemConfigurationData, checkoutTotal );
+            ReadCheckoutItemAddRemove( itemConfigurationData, checkoutTotal, true );
+        else if ( inBuf1 == "ri" ) // removeitem
+            ReadCheckoutItemAddRemove( itemConfigurationData, checkoutTotal, false );
         else if ( inBuf1 == "rt" ) // runtests
             checkoutTotalTest->RunTests();
         else if ( inBuf1 == "quit" )
@@ -270,7 +273,10 @@ void ReadItemConfiguration( ItemConfigurationData * itemConfigurationData )
     }
 }
 
-void ReadCheckoutItemAdd( ItemConfigurationData * itemConfigurationData, CheckoutTotal * checkoutTotal )
+// Manages the command line interface for adding and removing items to/from the checkout total. (Commands "ai" and "ri").
+// Prompts the User for required data, validates the data, and displays error messages if appropriate.
+// Displays information about the item added, and the previous and current checkout totals.
+void ReadCheckoutItemAddRemove( ItemConfigurationData * itemConfigurationData, CheckoutTotal * checkoutTotal, bool isAdd )
 {
     string itemName, tempBuf;
     unsigned int tempInt;
@@ -279,19 +285,24 @@ void ReadCheckoutItemAdd( ItemConfigurationData * itemConfigurationData, Checkou
     cout << "Enter Item name: ";
     getline( cin >> ws, itemName );
 
-    if ( !itemConfigurationData->Contains( itemName ) )
+    if ( !itemConfigurationData->Contains( itemName ) ) // If the requested item has not been configured.
     {
-        cout << itemName << " does not exist." << endl;
+        cout << itemName << " does not exist in configuration." << endl;
     }
     else
     {
         if ( !ReadQuantityParam( &tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units, "" ) )
-            INVALID_ENTRY;
+            INVALID_ENTRY;  // The entered quntity is not valid.
         else
         {
 
-            checkoutTotal->AddItem( itemConfigurationData, itemName, tempInt );
+            if ( isAdd )
+                checkoutTotal->AddItem( itemConfigurationData, itemName, tempInt );
+            else if ( !checkoutTotal->RemoveItem( itemConfigurationData, itemName, tempInt ) )
+                cout << endl << "Not available for removal." << endl;
 
+            // Display the item quantity, followed by the item configuration info, then the previous and current
+            // checkout totals.
             cout << endl << itemConfigurationData->GetQuantityString(
                 tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units, tempBuf ) << "\t";
             itemConfigurationData->DisplayItemConfigurationData( itemName );
@@ -366,9 +377,7 @@ void ItemConfigurationData::DisplayItemConfigurationData( void )
     map<string, ITEM_ATTRIBUTES_T>::iterator itr;
 
     for ( itr = itemConfigurationDataPtr->begin(); itr != itemConfigurationDataPtr->end(); itr++ )
-    {
         DisplayItemConfiguration( itr );
-    }
 }
 
 void ItemConfigurationData::DisplayItemConfigurationData( const string& itemName )
@@ -464,6 +473,28 @@ unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigDat
     return result;
 }
 
+bool CheckoutTotal::RemoveItem( ItemConfigurationData * itemConfigData, string itemName, unsigned int quantity )
+{
+    bool result = false;
+
+    if ( Contains( itemName ) && checkoutTotalDataPtr->at( itemName ).quantity >= quantity )
+    {
+        if ( checkoutTotalDataPtr->at( itemName ).quantity == quantity )
+            checkoutTotalDataPtr->erase( itemName );
+        else
+        {
+            checkoutTotalDataPtr->at( itemName ).quantity -= quantity;
+            checkoutTotalDataPtr->at( itemName ).groupPrice = GetGroupPrice( itemConfigData, itemName );
+        }
+
+        result = true;
+    }
+
+    UpdateCheckoutTotal();
+
+    return result;
+}
+
 void CheckoutTotal::UpdateCheckoutTotal( void )
 {
     checkoutTotal = 0;
@@ -493,7 +524,7 @@ CheckoutTotalTest::CheckoutTotalTest():
     itemConfigTestDataVector = new vector< tuple <string, ITEM_UNITS_T, unsigned int> >;
 
     // vector< tuple< itemName, add, quantity, checkoutTotal > >
-    checkoutTotalTestDataVector = new vector< tuple <string, unsigned int, unsigned int> >;
+    checkoutTotalTestDataVector = new vector< tuple <string, bool, unsigned int, unsigned int> >;
 
     InitializeTestDataVectors();
 }
@@ -558,10 +589,12 @@ void CheckoutTotalTest::CheckoutRunningTotalTest( void )
     // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
     for ( auto itr : ( * checkoutTotalTestDataVector ) )
     {
+        if ( get<1>( itr ) )
+            checkoutTotal->AddItem( itemConfigurationData, get<0>( itr ), get<2>( itr ) );
+        else
+            checkoutTotal->RemoveItem( itemConfigurationData, get<0>( itr ), get<2>( itr ) );
 
-        checkoutTotal->AddItem( itemConfigurationData, get<0>( itr ), get<1>( itr ) );
-
-        ActualVsExpected( get<0>( itr ), "checkoutTotal", get<2>( itr ), checkoutTotal->GetCheckoutTotal() );
+        ActualVsExpected( get<0>( itr ), "checkoutTotal", get<3>( itr ), checkoutTotal->GetCheckoutTotal() );
     }
 }
 
@@ -607,8 +640,13 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // NOTE: Anytime a special is calculated, unit price fractional pennies are 
     //       truncated; in favor of the customer.
 
-    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", 200, 998 ) ); // 998
-    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", 1, 1296 ) ); // 298
-    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", 2, 1892 ) ); // 298
-    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", 153, 2655 ) ); // 998
+    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", true, 200, 998 ) ); // 998
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", true, 1, 1296 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", true, 2, 1892 ) ); // 596
+    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", true, 153, 2655 ) ); // 763
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 2357 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", false, 200, 1359 ) ); // 998
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 1061 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", false, 153, 298 ) ); // 763
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 0 ) ); // 298
 }
