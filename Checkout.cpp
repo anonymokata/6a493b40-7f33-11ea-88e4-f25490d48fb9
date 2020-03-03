@@ -26,10 +26,24 @@ typedef enum
     ITEM_UNITS_WEIGHT
 } ITEM_UNITS_T;
 
+typedef enum
+{
+    SPECIAL_MARK_DOWN
+} SPECIAL_TYPE_T;
+
+typedef struct
+{
+    SPECIAL_TYPE_T specialType;
+
+    unsigned int pctOff;
+
+} SPECIAL_ATTRIBUTES_T;
+
 typedef struct
 {
     unsigned int priceCents;
     ITEM_UNITS_T    units;
+    SPECIAL_ATTRIBUTES_T* specialAttributesPtr;
 } ITEM_ATTRIBUTES_T;
 
 
@@ -46,6 +60,7 @@ public:
 
     bool AddItem( const string& itemName, ITEM_UNITS_T units, unsigned int priceCents );
     bool Contains( const string& itemName );
+    bool AddSpecial( const string& itemName, const SPECIAL_ATTRIBUTES_T& specialAttributes );
     ITEM_ATTRIBUTES_T GetItemAttributes( const string& itemName );
     void ClearData( void );
     void DisplayItemConfigurationData( void );
@@ -94,6 +109,7 @@ private:
     bool Contains( const string& itemName );
     unsigned int GetGroupPrice( ItemConfigurationData * itemConfigData, const string& itemName );
     void UpdateCheckoutTotal( void );
+    unsigned int ComputePriceAfterPctOff( unsigned int quantity, unsigned int unitPrice, unsigned int pctOff, unsigned int unitsDivier );
 };
 
 
@@ -119,12 +135,16 @@ private:
     // vector< tuple< itemName, units, priceCents > >
     vector< tuple <string, ITEM_UNITS_T, unsigned int> > * itemConfigTestDataVector;
 
+    // vector< tuple< itemName, specialType, pctOff > >
+    vector< tuple <string, SPECIAL_TYPE_T, unsigned int> > * itemConfigSpecialTestDataVector;
+
     // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
     vector< tuple <string, bool, unsigned int, unsigned int> > * checkoutTotalTestDataVector;
 
     bool ActualVsExpected( const string& itemName, const string& paramName, unsigned int expected, unsigned int actual );
     void DisplayTestResultsBanner( const string& title );
     void AddAndReadBackTestOfItemConfiguration( void );
+    void AddAndReadBackTestOfSpecialConfiguration( void );
     void CheckoutRunningTotalTest( void );
     void InitializeTestDataVectors( void );
 };
@@ -138,6 +158,7 @@ bool ValidateNumericEntryString( const string& inLine, unsigned int * outVal, un
 bool ReadPriceParam( unsigned int * inVal, const string& inBuf, const string& paramName );
 bool ReadQuantityParam( unsigned int * inVal, ITEM_UNITS_T units, const string& paramName, unsigned int lowLimit = QUANTITY_LOW_LIMIT );
 void ReadItemConfiguration( ItemConfigurationData * itemConfigurationData );
+void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData );
 void ReadCheckoutItemAddRemove( ItemConfigurationData * itemConfigurationData, CheckoutTotal * checkoutTotal, bool isAdd );
 string CentsToDollarsString( unsigned int cents );
 
@@ -157,10 +178,12 @@ int main( void )
     while ( inBuf1 != "quit" )
     {
         cout << ">";
-        cin >> inBuf1;
+        getline( std::cin >> std::ws, inBuf1 );
 
         if ( inBuf1 == "ci" ) // configitem
             ReadItemConfiguration( itemConfigurationData );
+        else if ( inBuf1 == "cs" ) // configspecial
+            ReadSpecialConfiguration( itemConfigurationData );
         else if ( inBuf1 == "lc" ) // listconfig
             itemConfigurationData->DisplayItemConfigurationData();
         else if ( inBuf1 == "ai" ) // additem
@@ -273,6 +296,54 @@ void ReadItemConfiguration( ItemConfigurationData * itemConfigurationData )
     }
 }
 
+// Manages the command line interface for configuring Specials. (Command "cs").
+// Prompts the User for required data, validates the data, and displays error messages if appropriate.
+void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
+{
+    bool allEntriesAreValid = true;
+    string itemName, inBuf1;
+    unsigned int tempInt;
+    SPECIAL_ATTRIBUTES_T specialAttributes;
+
+    memset( &specialAttributes, 0, sizeof( SPECIAL_ATTRIBUTES_T ) );
+
+    cout << "Enter the name of the item the Special will be associated with: ";
+    getline( cin >> ws, itemName );
+
+    if ( !itemConfigurationData->Contains( string( itemName ) ) )
+    {
+        INVALID_ENTRY;
+        cout << "Item does not exist in Configuration Data" << endl;
+    }
+    else
+    {
+        cout << "Choose Special type: " << endl;
+        cout << "0) SPECIAL_MARK_DOWN" << endl;
+        cout << "Enter 0: ";
+
+        getline( cin >> ws, inBuf1 );
+
+        if ( !ValidateNumericEntryString( inBuf1, &tempInt, 0, 0 ) )
+            INVALID_ENTRY;
+        else
+        {
+            specialAttributes.specialType = ( SPECIAL_TYPE_T ) tempInt;
+
+            cout << "Enter pctOff (1 - 100): ";
+            getline( cin >> ws, inBuf1 );
+            if ( !ValidateNumericEntryString( inBuf1, &tempInt, 1, 100 ) )
+                allEntriesAreValid = false;
+            else
+                specialAttributes.pctOff = tempInt;
+
+            if ( !allEntriesAreValid )
+                INVALID_ENTRY;
+            else if ( !itemConfigurationData->AddSpecial( string( itemName ), specialAttributes ) )
+                cout << "Error adding special to Configuration Data" << endl;
+        }
+    }
+}
+
 // Manages the command line interface for adding and removing items to/from the checkout total. (Commands "ai" and "ri").
 // Prompts the User for required data, validates the data, and displays error messages if appropriate.
 // Displays information about the item added, and the previous and current checkout totals.
@@ -341,7 +412,7 @@ bool ItemConfigurationData::AddItem( const string& itemName, ITEM_UNITS_T units,
 
     if ( !Contains( itemName ) )
     {
-        itemConfigurationDataPtr->insert( pair<string, ITEM_ATTRIBUTES_T>( itemName, { priceCents, units } ) );
+        itemConfigurationDataPtr->insert( pair<string, ITEM_ATTRIBUTES_T>( itemName, { priceCents, units, nullptr } ) );
         result = true;
     }
 
@@ -362,13 +433,44 @@ bool ItemConfigurationData::Contains( const string& itemName )
     return result;
 }
 
+// Allocates memory for a new SPECIAL_ATTRIBUTES_T, copies the data to it, and assignes its pointer to
+// the ITEM_ATTRIBUTES_T associated with itemName.
+bool ItemConfigurationData::AddSpecial( const string& itemName, const SPECIAL_ATTRIBUTES_T& specialAttributes )
+{
+    bool result = false;
+
+    if ( Contains( itemName ) )
+    {
+        SPECIAL_ATTRIBUTES_T* specialAttrPtr = new SPECIAL_ATTRIBUTES_T;
+
+        memset( specialAttrPtr, 0, sizeof( SPECIAL_ATTRIBUTES_T ) );
+
+        ( * specialAttrPtr ) = specialAttributes;
+
+        itemConfigurationDataPtr->at( itemName ).specialAttributesPtr = specialAttrPtr;
+
+        result = true;
+    }
+
+    return result;
+}
+
 ITEM_ATTRIBUTES_T ItemConfigurationData::GetItemAttributes( const string& itemName )
 {
     return itemConfigurationDataPtr->at( itemName );
 }
 
+// Prior to clearing the map<> associated with the configuration data, loop through
+// and delete any memory that may have been dynamically allocated for Specials.
 void ItemConfigurationData::ClearData( void )
 {
+    for ( auto itr : ( * itemConfigurationDataPtr ) )
+    {
+        // Delete dynamically allocated memory
+        if ( itr.second.specialAttributesPtr != nullptr )
+            delete itr.second.specialAttributesPtr;
+    }
+
     itemConfigurationDataPtr->clear();
 }
 
@@ -386,12 +488,24 @@ void ItemConfigurationData::DisplayItemConfigurationData( const string& itemName
     DisplayItemConfiguration( itr );
 }
 
+// Displays the configuration attributes of a confguration item. This includes the item name,
+// unit price, and a description of any associated Specials.
 void ItemConfigurationData::DisplayItemConfiguration( map<string, ITEM_ATTRIBUTES_T>::iterator itr )
 {
-    string buf1, buf2;
-
     cout << itr->first << "\t" << CentsToDollarsString( itr->second.priceCents ) \
         << "\t" << ( ( itr->second.units == ITEM_UNITS_EACH ) ? "EACH" : "LB" );
+
+    if ( itr->second.specialAttributesPtr != nullptr )
+    {
+        cout << "\t";
+
+        switch ( itr->second.specialAttributesPtr->specialType )
+        {
+        case SPECIAL_MARK_DOWN:
+            cout << itr->second.specialAttributesPtr->pctOff << "% off";
+            break;
+        }
+    }
 
     cout << endl;
 }
@@ -443,8 +557,6 @@ bool CheckoutTotal::Contains( const string& itemName )
 
 void CheckoutTotal::AddItem( ItemConfigurationData * itemConfigData, const string& itemName, unsigned int quantity )
 {
-    ITEM_UNITS_T tempItemUnits = itemConfigData->GetItemAttributes( itemName ).units;
-
     // If a slot in the current map<> does not exist; create one.
     if ( !Contains( itemName ) )
         checkoutTotalDataPtr->insert( pair<string, CheckoutTotal::ITEM_ATTRIBUTES_CHECKOUT_TOTAL_T>( itemName, { 0, 0 } ) );
@@ -457,7 +569,6 @@ void CheckoutTotal::AddItem( ItemConfigurationData * itemConfigData, const strin
 unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigData, const string& itemName )
 {
     unsigned int result = 0;
-    unsigned int tempResult = 0;
     unsigned int unitsDivider = CENTI_POUNDS_PER_POUND;
     unsigned int groupQuantity = checkoutTotalDataPtr->at( itemName ).quantity;
     ITEM_ATTRIBUTES_T tempItemAttributes = itemConfigData->GetItemAttributes( itemName );
@@ -467,7 +578,36 @@ unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigDat
     if ( tempItemAttributes.units == ITEM_UNITS_EACH )
         unitsDivider = 1;
 
-    result = groupQuantity * tempItemAttributes.priceCents;
+    // If there is a Special associated with this item.
+    if ( tempItemAttributes.specialAttributesPtr != nullptr )
+    {
+        switch ( tempItemAttributes.specialAttributesPtr->specialType )
+        {
+        case SPECIAL_MARK_DOWN:
+            result += ComputePriceAfterPctOff( groupQuantity, tempItemAttributes.priceCents,
+                tempItemAttributes.specialAttributesPtr->pctOff, unitsDivider );
+            break;
+
+        default:
+            break;
+        }
+    }
+    else
+    {
+        result = groupQuantity * tempItemAttributes.priceCents;
+        result /= unitsDivider;
+    }
+
+    return result;
+}
+
+unsigned int CheckoutTotal::ComputePriceAfterPctOff( unsigned int quantity, unsigned int unitPrice,
+                                                     unsigned int pctOff, unsigned int unitsDivider )
+{
+    unsigned int discountUnitPrice = unitPrice * ( 100 - pctOff );
+    discountUnitPrice /= CENTS_PER_DOLLAR;
+
+    unsigned int result = quantity * discountUnitPrice;
     result /= unitsDivider;
 
     return result;
@@ -523,6 +663,9 @@ CheckoutTotalTest::CheckoutTotalTest():
     // vector< tuple< itemName, units, priceCents > >
     itemConfigTestDataVector = new vector< tuple <string, ITEM_UNITS_T, unsigned int> >;
 
+    // vector< tuple< itemName, specialType, pctOff > >
+    itemConfigSpecialTestDataVector = new vector< tuple <string, SPECIAL_TYPE_T, unsigned int> >;
+
     // vector< tuple< itemName, add, quantity, checkoutTotal > >
     checkoutTotalTestDataVector = new vector< tuple <string, bool, unsigned int, unsigned int> >;
 
@@ -534,10 +677,12 @@ CheckoutTotalTest::~CheckoutTotalTest()
     itemConfigurationData->ClearData();
     checkoutTotal->ClearData();
     itemConfigTestDataVector->clear();
+    itemConfigSpecialTestDataVector->clear();
     checkoutTotalTestDataVector->clear();
     delete itemConfigurationData;
     delete checkoutTotal;
     delete itemConfigTestDataVector;
+    delete itemConfigSpecialTestDataVector;
     delete checkoutTotalTestDataVector;
 }
 
@@ -546,11 +691,15 @@ void CheckoutTotalTest::RunTests()
     overallResult = true;
 
     AddAndReadBackTestOfItemConfiguration();
+    AddAndReadBackTestOfSpecialConfiguration();
     CheckoutRunningTotalTest();
 
     overallResult ? DisplayTestResultsBanner( "Overall Result: PASS" ) : DisplayTestResultsBanner( "Overall Result : FAIL" );
 }
 
+// Adds the constant item test data in the itemConfigTestDataVector to the itemConfigurationData.
+// Reads back the data and compares it to the original constant item test data. This verifies that data
+// can be setup in the configuration object as required.
 void CheckoutTotalTest::AddAndReadBackTestOfItemConfiguration( void )
 {
     itemConfigurationData->ClearData();
@@ -580,6 +729,74 @@ void CheckoutTotalTest::AddAndReadBackTestOfItemConfiguration( void )
         }
     }
 }
+
+// Adds the constant Special test data in the itemConfigSpecialTestDataVector to the itemConfigurationData.
+// Reads back the data and compares it to the original constant Special test data. This verifies that data
+// can be setup in the configuration object as required.
+void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
+{
+    SPECIAL_ATTRIBUTES_T specialAttributes;
+
+    memset( &specialAttributes, 0, sizeof( SPECIAL_ATTRIBUTES_T ) );
+
+    DisplayTestResultsBanner( "Add/Read-Back Test of Item Special Configuration" );
+
+    // Configure the Special test data.
+    // vector< tuple< itemName, specialType, pctOff > >
+    for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
+    {
+        switch ( get<1>( itr ) )
+        {
+        case SPECIAL_MARK_DOWN:
+            specialAttributes.specialType = get<1>( itr );
+            specialAttributes.pctOff = get<2>( itr );
+            break;
+
+        default:
+            cout << "Special Type not found.";
+            PRINT_FAIL_END;
+            break;
+        }
+
+        ( void ) itemConfigurationData->AddSpecial( get<0>( itr ), specialAttributes );
+    }
+
+    // Read back and verify the Special data.
+    // vector< tuple< itemName, specialType, pctOff> >
+    for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
+    {
+        cout << get<0>( itr ) << " Special";
+        if ( !itemConfigurationData->Contains( get<0>( itr ) ) )
+        {
+            cout << ": Attempt to add special to nonexistent item.";
+            PRINT_FAIL_END;
+        }
+        else if ( itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr == nullptr )
+        {
+            cout << " not found.";
+            PRINT_FAIL_END;
+        }
+        else
+        {
+            cout << " found."; PRINT_PASS_END;
+
+            if ( ActualVsExpected( get<0>( itr ), "specialType", ( unsigned int ) get<1>( itr ), ( unsigned int ) itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->specialType ) )
+            {
+                switch ( get<1>( itr ) )
+                {
+                case SPECIAL_MARK_DOWN:
+                    ( void ) ActualVsExpected( get<0>( itr ), "pctOff", get<2>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->pctOff );
+                    break;
+                default:
+                    cout << "Special Type not found.";
+                    PRINT_FAIL_END;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 
 void CheckoutTotalTest::CheckoutRunningTotalTest( void )
 {
@@ -623,15 +840,28 @@ void CheckoutTotalTest::DisplayTestResultsBanner( const string& title )
     cout << "///////////////////////////////////////////////////////////////////////////////" << endl << endl;
 }
 
+// Sets up the pre-determined data to run the tests against.
 void CheckoutTotalTest::InitializeTestDataVectors( void )
 {
     ///////////////////////////////////////////////////////////////////////////
     // Initialize vector used to store test data for Item Configuration
     // add/read-back test.
 
-    // Items.
+    // Items without specials assigned.
     itemConfigTestDataVector->push_back( make_tuple( "Corn Flakes", ITEM_UNITS_EACH, 298 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Ground Beef", ITEM_UNITS_WEIGHT, 499 ) );
+    // Items with specials assigned.
+    itemConfigTestDataVector->push_back( make_tuple( "Walnuts", ITEM_UNITS_EACH, 597 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Pears", ITEM_UNITS_WEIGHT, 129 ) );
+
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Initialize vector used to store test data for Item Special Configuration
+    // add/read-back test.
+
+    // SPECIAL_MARK_DOWN, weighted and unweighted items.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Walnuts", SPECIAL_MARK_DOWN, 25 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Pears", SPECIAL_MARK_DOWN, 15 ) );
 
 
     ///////////////////////////////////////////////////////////////////////////
@@ -649,4 +879,29 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 1061 ) ); // 298
     checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", false, 153, 298 ) ); // 763
     checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 0 ) ); // 298
+
+    // Test SPECIAL_MARK_DOWN items.
+
+    // Regular price  = 5.97
+    // Discount price = 5.97 * 0.75 = 4.47
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", true, 1, 447 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", true, 2, 1341 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", false, 1, 894 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", false, 1, 447 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", false, 1, 0 ) );
+
+    // Regular price  = 1.29
+    // Discount price = 1.29 * 0.85 = 1.09
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", true, 100, 109 ) );
+    // (1.0 + 1.21) * 109 = 240
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", true, 121, 240 ) );
+    // (1.0 + 1.21 + 0.67) * 109 = 240
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", true, 67, 313 ) );
+    // (1.21) * 109 = 240
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 167, 131 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 121, 0 ) );
+
 }
+
+// NOTES:
+// g++ -std=c++11 -Wall -Wextra -pedantic-errors Checkout.cpp -o Checkout
