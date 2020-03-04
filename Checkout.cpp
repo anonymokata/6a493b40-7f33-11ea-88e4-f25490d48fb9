@@ -28,13 +28,15 @@ typedef enum
 
 typedef enum
 {
-    SPECIAL_MARK_DOWN
+    SPECIAL_MARK_DOWN,
+    SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF,
 } SPECIAL_TYPE_T;
 
 typedef struct
 {
     SPECIAL_TYPE_T specialType;
-
+    unsigned int buyN;
+    unsigned int getM;
     unsigned int pctOff;
 
 } SPECIAL_ATTRIBUTES_T;
@@ -109,6 +111,7 @@ private:
     bool Contains( const string& itemName );
     unsigned int GetGroupPrice( ItemConfigurationData * itemConfigData, const string& itemName );
     void UpdateCheckoutTotal( void );
+    unsigned int Apply_BuyN_GetM_At_X_PctOff( ITEM_ATTRIBUTES_T& itemAttr, unsigned int quantity, unsigned int unitsDivider );
     unsigned int ComputePriceAfterPctOff( unsigned int quantity, unsigned int unitPrice, unsigned int pctOff, unsigned int unitsDivier );
 };
 
@@ -135,8 +138,8 @@ private:
     // vector< tuple< itemName, units, priceCents > >
     vector< tuple <string, ITEM_UNITS_T, unsigned int> > * itemConfigTestDataVector;
 
-    // vector< tuple< itemName, specialType, pctOff > >
-    vector< tuple <string, SPECIAL_TYPE_T, unsigned int> > * itemConfigSpecialTestDataVector;
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff > >
+    vector< tuple <string, SPECIAL_TYPE_T, unsigned int, unsigned int, unsigned int> > * itemConfigSpecialTestDataVector;
 
     // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
     vector< tuple <string, bool, unsigned int, unsigned int> > * checkoutTotalTestDataVector;
@@ -319,22 +322,42 @@ void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
     {
         cout << "Choose Special type: " << endl;
         cout << "0) SPECIAL_MARK_DOWN" << endl;
-        cout << "Enter 0: ";
+        cout << "1) SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF" << endl;
+        cout << "Enter 0 or 1: ";
 
         getline( cin >> ws, inBuf1 );
 
-        if ( !ValidateNumericEntryString( inBuf1, &tempInt, 0, 0 ) )
+        if ( !ValidateNumericEntryString( inBuf1, &tempInt, 0, 1 ) )
             INVALID_ENTRY;
         else
         {
             specialAttributes.specialType = ( SPECIAL_TYPE_T ) tempInt;
 
-            cout << "Enter pctOff (1 - 100): ";
-            getline( cin >> ws, inBuf1 );
-            if ( !ValidateNumericEntryString( inBuf1, &tempInt, 1, 100 ) )
-                allEntriesAreValid = false;
-            else
-                specialAttributes.pctOff = tempInt;
+            if ( specialAttributes.specialType != SPECIAL_MARK_DOWN )
+            {
+                // Read buyN
+                if ( !ReadQuantityParam( &tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units, "buyN" ) )
+                    allEntriesAreValid = false;
+                else
+                    specialAttributes.buyN = tempInt;
+
+                // Read getM
+                if ( allEntriesAreValid &&
+                    !ReadQuantityParam( &tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units, "getM" ) )
+                    allEntriesAreValid = false;
+                else
+                    specialAttributes.getM = tempInt;
+            }
+
+            if ( allEntriesAreValid )
+            {
+                cout << "Enter pctOff (1 - 100): ";
+                getline( cin >> ws, inBuf1 );
+                if ( !ValidateNumericEntryString( inBuf1, &tempInt, 1, 100 ) )
+                    allEntriesAreValid = false;
+                else
+                    specialAttributes.pctOff = tempInt;
+            }
 
             if ( !allEntriesAreValid )
                 INVALID_ENTRY;
@@ -366,7 +389,6 @@ void ReadCheckoutItemAddRemove( ItemConfigurationData * itemConfigurationData, C
             INVALID_ENTRY;  // The entered quntity is not valid.
         else
         {
-
             if ( isAdd )
                 checkoutTotal->AddItem( itemConfigurationData, itemName, tempInt );
             else if ( !checkoutTotal->RemoveItem( itemConfigurationData, itemName, tempInt ) )
@@ -492,6 +514,8 @@ void ItemConfigurationData::DisplayItemConfigurationData( const string& itemName
 // unit price, and a description of any associated Specials.
 void ItemConfigurationData::DisplayItemConfiguration( map<string, ITEM_ATTRIBUTES_T>::iterator itr )
 {
+    string buf1, buf2;
+
     cout << itr->first << "\t" << CentsToDollarsString( itr->second.priceCents ) \
         << "\t" << ( ( itr->second.units == ITEM_UNITS_EACH ) ? "EACH" : "LB" );
 
@@ -503,6 +527,11 @@ void ItemConfigurationData::DisplayItemConfiguration( map<string, ITEM_ATTRIBUTE
         {
         case SPECIAL_MARK_DOWN:
             cout << itr->second.specialAttributesPtr->pctOff << "% off";
+            break;
+        case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+            cout << "Buy " << GetQuantityString( itr->second.specialAttributesPtr->buyN, itr->second.units, buf1 ) \
+                << " Get " << GetQuantityString( itr->second.specialAttributesPtr->getM, itr->second.units, buf2 ) \
+                << " at " << itr->second.specialAttributesPtr->pctOff << "% off";
             break;
         }
     }
@@ -587,6 +616,9 @@ unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigDat
             result += ComputePriceAfterPctOff( groupQuantity, tempItemAttributes.priceCents,
                 tempItemAttributes.specialAttributesPtr->pctOff, unitsDivider );
             break;
+        case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+            result += Apply_BuyN_GetM_At_X_PctOff( tempItemAttributes, groupQuantity, unitsDivider );
+            break;
 
         default:
             break;
@@ -597,6 +629,43 @@ unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigDat
         result = groupQuantity * tempItemAttributes.priceCents;
         result /= unitsDivider;
     }
+
+    return result;
+}
+
+// Buys N, then as much of M as is appropriate for the total quantity. Repeats loop until the quantity
+// is consumed. Returns total price paid.
+unsigned int CheckoutTotal::Apply_BuyN_GetM_At_X_PctOff( ITEM_ATTRIBUTES_T& itemAttr, unsigned int quantity, unsigned int unitsDivider )
+{
+    unsigned int result = 0;
+    unsigned int tempQuantity = quantity;
+    unsigned int tempResult = 0;
+
+    while ( tempQuantity > itemAttr.specialAttributesPtr->buyN )
+    {
+        // Buy a quantity of N.
+        result += ( itemAttr.specialAttributesPtr->buyN * itemAttr.priceCents ) / unitsDivider;
+        tempQuantity -= itemAttr.specialAttributesPtr->buyN;
+
+        // If, after buying N, the remaining quantity is less than M,  buy only that quantity
+        // at the discounted price. Otherwise buy M at the discounted price.
+        if ( tempQuantity < itemAttr.specialAttributesPtr->getM )
+        {
+            tempResult = ComputePriceAfterPctOff( tempQuantity, itemAttr.priceCents,
+                                                  itemAttr.specialAttributesPtr->pctOff, unitsDivider );
+            tempQuantity = 0;
+        }
+        else
+        {
+            tempResult = ComputePriceAfterPctOff( itemAttr.specialAttributesPtr->getM, itemAttr.priceCents,
+                                                  itemAttr.specialAttributesPtr->pctOff, unitsDivider );
+            tempQuantity -= itemAttr.specialAttributesPtr->getM ;
+        }
+        result += tempResult;
+    }
+
+    // The remainder are charged the regular price.
+    result += ( tempQuantity * itemAttr.priceCents ) / unitsDivider;
 
     return result;
 }
@@ -663,10 +732,10 @@ CheckoutTotalTest::CheckoutTotalTest():
     // vector< tuple< itemName, units, priceCents > >
     itemConfigTestDataVector = new vector< tuple <string, ITEM_UNITS_T, unsigned int> >;
 
-    // vector< tuple< itemName, specialType, pctOff > >
-    itemConfigSpecialTestDataVector = new vector< tuple <string, SPECIAL_TYPE_T, unsigned int> >;
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff > >
+    itemConfigSpecialTestDataVector = new vector< tuple <string, SPECIAL_TYPE_T, unsigned int, unsigned int, unsigned int> >;
 
-    // vector< tuple< itemName, add, quantity, checkoutTotal > >
+    // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
     checkoutTotalTestDataVector = new vector< tuple <string, bool, unsigned int, unsigned int> >;
 
     InitializeTestDataVectors();
@@ -742,14 +811,20 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
     DisplayTestResultsBanner( "Add/Read-Back Test of Item Special Configuration" );
 
     // Configure the Special test data.
-    // vector< tuple< itemName, specialType, pctOff > >
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff > >
     for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
     {
+        specialAttributes.specialType = get<1>( itr );
+
         switch ( get<1>( itr ) )
         {
         case SPECIAL_MARK_DOWN:
-            specialAttributes.specialType = get<1>( itr );
-            specialAttributes.pctOff = get<2>( itr );
+            specialAttributes.pctOff = get<4>( itr );
+            break;
+        case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+            specialAttributes.buyN = get<2>( itr );
+            specialAttributes.getM = get<3>( itr );
+            specialAttributes.pctOff = get<4>( itr );
             break;
 
         default:
@@ -782,21 +857,13 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
 
             if ( ActualVsExpected( get<0>( itr ), "specialType", ( unsigned int ) get<1>( itr ), ( unsigned int ) itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->specialType ) )
             {
-                switch ( get<1>( itr ) )
-                {
-                case SPECIAL_MARK_DOWN:
-                    ( void ) ActualVsExpected( get<0>( itr ), "pctOff", get<2>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->pctOff );
-                    break;
-                default:
-                    cout << "Special Type not found.";
-                    PRINT_FAIL_END;
-                    break;
-                }
+                ( void ) ActualVsExpected( get<0>( itr ), "buyN", get<2>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->buyN );
+                ( void ) ActualVsExpected( get<0>( itr ), "getM", get<3>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->getM );
+                ( void ) ActualVsExpected( get<0>( itr ), "pctOff", get<4>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->pctOff );
             }
         }
     }
 }
-
 
 void CheckoutTotalTest::CheckoutRunningTotalTest( void )
 {
@@ -851,8 +918,10 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     itemConfigTestDataVector->push_back( make_tuple( "Corn Flakes", ITEM_UNITS_EACH, 298 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Ground Beef", ITEM_UNITS_WEIGHT, 499 ) );
     // Items with specials assigned.
+    itemConfigTestDataVector->push_back( make_tuple( "Whole Grain Bread", ITEM_UNITS_EACH, 249 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Walnuts", ITEM_UNITS_EACH, 597 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Pears", ITEM_UNITS_WEIGHT, 129 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", ITEM_UNITS_WEIGHT, 199 ) );
 
 
     ///////////////////////////////////////////////////////////////////////////
@@ -860,8 +929,12 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // add/read-back test.
 
     // SPECIAL_MARK_DOWN, weighted and unweighted items.
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Walnuts", SPECIAL_MARK_DOWN, 25 ) );
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Pears", SPECIAL_MARK_DOWN, 15 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Walnuts", SPECIAL_MARK_DOWN, 0, 0, 25 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Pears", SPECIAL_MARK_DOWN, 0, 0, 15 ) );
+
+    // SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, weighted and unweighted items.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Whole Grain Bread", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 1, 1, 100 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 200, 100, 25 ) );
 
 
     ///////////////////////////////////////////////////////////////////////////
@@ -900,6 +973,38 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // (1.21) * 109 = 240
     checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 167, 131 ) );
     checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 121, 0 ) );
+
+    // Test SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF items.
+
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", true, 1, 249 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", true, 1, 249 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", true, 1, 498 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", true, 1, 498 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", false, 2, 249 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", false, 2, 0 ) );
+
+    // Reglar price: 1.99 / lb
+    // Discount price = 1.99 * 0.75 = 1.49 / lb
+    //
+    // x < 200
+    // Price for new total = 1.53 * 199 = 304
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", true, 153, 304 ) );
+    // 200 < x < 300
+    // Price for new total =  2.0 * 199 + (1.53 + 0.75 - 2.0) * 149 = 398 + 41 = 439
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", true, 75, 439 ) );
+    // 300 < x < 500
+    // Price for new total =  2.0 * 199 + 1.0 * 149 + (1.53 + 0.75 + 2.15 - 3.0) * 199 = 398 + 149 + 284 = 831
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", true, 215, 831 ) );
+    // 600 < x < 800
+    // Price for new total =  4.0 * 199 + 2.0 * 149 + (1.53 + 0.75 + 2.15 + 2.03 - 6.0) * 199 = 796 + 298 + 91 = 1185
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", true, 203, 1185 ) );
+    // 500 < x < 600
+    // Price for new total =  4.0 * 199 + 1.0 * 149 + (1.53 + 2.15 + 2.03 - 5.0 ) * 149 = 796 + 149 + 105 = 1050
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 75, 1050 ) );
+    // x < 200
+    // Price for new total = 1.53 * 199 = 304
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 418, 304 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 153, 0 ) );
 
 }
 
