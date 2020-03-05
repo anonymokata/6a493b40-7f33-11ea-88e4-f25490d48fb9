@@ -62,6 +62,10 @@ typedef struct
 //                  ItemConfigurationData Class                              //
 ///////////////////////////////////////////////////////////////////////////////
 
+// This class uses a <map> to store grocery item ITEM_ATTRIBUTES_T structures, addressable by the item name.
+// One Special (SPECIAL_ATTRIBUTES_T) can be assigned to each item in the <map>, using the specialAttributesPtr
+// in the ITEM_ATTRIBUTES_T structure.
+
 class ItemConfigurationData
 {
 public:
@@ -90,6 +94,12 @@ private:
 ///////////////////////////////////////////////////////////////////////////////
 //                        CheckoutTotal Class                                //
 ///////////////////////////////////////////////////////////////////////////////
+
+// This class uses a <map> to store grocery items that have been scanned at a checkout register.
+// The map is addressable by the item name, and stores an ITEM_ATTRIBUTES_CHECKOUT_TOTAL_T structure
+// for each item. There is only one slot in the <map> for each unique item name. The
+// ITEM_ATTRIBUTES_CHECKOUT_TOTAL_T structure is used to keep track of current quantity 
+// and total price (groupPrice) for each item.
 
 class CheckoutTotal
 {
@@ -128,6 +138,14 @@ private:
 //                      CheckoutTotalTest Class                              //
 ///////////////////////////////////////////////////////////////////////////////
 
+// This class is used to test the ItemConfigurationData and CheckoutTotal classes. It has its own private instances
+// of these classes. It keeps constant pre-determined test data in 3 vector<>s. There is a test vector of
+// Item configuration data, a test vector of Special configuration data and a test vector of checkout data.
+// The configuration test vectors are used for a write/read-back verification test of the ItemConfigurationData object.
+// The checkout test vector is used to perform a running total test on the CheckoutTotal object. Items are
+// sequentially added and removed. After each operation, the resulting checkout total is compared to 
+// the expected total in the test vector.
+
 class CheckoutTotalTest
 {
 public:
@@ -135,6 +153,7 @@ public:
     ~CheckoutTotalTest();
 
     void RunTests( void );
+    void GetItemConfigTestDataVector( ItemConfigurationData * itemConfigurationData );
 
 protected:
 
@@ -155,7 +174,9 @@ private:
     bool ActualVsExpected( const string& itemName, const string& paramName, unsigned int expected, unsigned int actual );
     void DisplayTestResultsBanner( const string& title );
     void AddAndReadBackTestOfItemConfiguration( void );
+    void AddItemConfigTestDataToConfiguration( ItemConfigurationData * itemConfigurationData );
     void AddAndReadBackTestOfSpecialConfiguration( void );
+    void AddItemConfigSpecialTestDataToConfiguration( ItemConfigurationData * itemConfigurationData );
     void CheckoutRunningTotalTest( void );
     void InitializeTestDataVectors( void );
 };
@@ -197,12 +218,18 @@ int main( void )
             ReadSpecialConfiguration( itemConfigurationData );
         else if ( inBuf1 == "lc" ) // listconfig
             itemConfigurationData->DisplayItemConfigurationData();
+        else if ( inBuf1 == "clearconfig" )
+            itemConfigurationData->ClearData();
         else if ( inBuf1 == "ai" ) // additem
             ReadCheckoutItemAddRemove( itemConfigurationData, checkoutTotal, true );
         else if ( inBuf1 == "ri" ) // removeitem
             ReadCheckoutItemAddRemove( itemConfigurationData, checkoutTotal, false );
+        else if ( inBuf1 == "clearcheckout" )
+            checkoutTotal->ClearData();
         else if ( inBuf1 == "rt" ) // runtests
             checkoutTotalTest->RunTests();
+        else if ( inBuf1 == "loadtestconfig" )
+            checkoutTotalTest->GetItemConfigTestDataVector( itemConfigurationData );
         else if ( inBuf1 == "quit" )
             break;
         else
@@ -220,6 +247,7 @@ int main( void )
 //                     Command Line Interface                                //
 ///////////////////////////////////////////////////////////////////////////////
 
+// Validates numeric entry strings enter by the User at the command line.
 bool ValidateNumericEntryString( const string& inLine, unsigned int * outVal, unsigned int lowLimit, unsigned int upLimit )
 {
     bool result = true;
@@ -240,6 +268,7 @@ bool ValidateNumericEntryString( const string& inLine, unsigned int * outVal, un
     return result;
 }
 
+// Prompts the User to enter a Price parameter and validates the entry.
 bool ReadPriceParam( unsigned int * inVal, const string& inBuf, const string& paramName )
 {
     bool result = true;
@@ -253,6 +282,7 @@ bool ReadPriceParam( unsigned int * inVal, const string& inBuf, const string& pa
     return result;
 }
 
+// Prompts the User to enter a Quantity parameter and validates the entry.
 bool ReadQuantityParam( unsigned int * inVal, ITEM_UNITS_T units, const string& paramName, unsigned int lowLimit )
 {
     bool result = true;
@@ -277,6 +307,8 @@ bool ReadQuantityParam( unsigned int * inVal, ITEM_UNITS_T units, const string& 
     return result;
 }
 
+// Manages the command line interface for configuring grocery items. (Command "ci").
+// Prompts the User for required data, validates the data, and displays error messages if appropriate.
 void ReadItemConfiguration( ItemConfigurationData * itemConfigurationData )
 {
     string itemName, inBuf;
@@ -547,6 +579,7 @@ void ItemConfigurationData::ClearData( void )
     itemConfigurationDataPtr->clear();
 }
 
+// Displays all the grocery items in the current configuration to the User.
 void ItemConfigurationData::DisplayItemConfigurationData( void )
 {
     map<string, ITEM_ATTRIBUTES_T>::iterator itr;
@@ -555,6 +588,7 @@ void ItemConfigurationData::DisplayItemConfigurationData( void )
         DisplayItemConfiguration( itr );
 }
 
+// Displays the grocery item specified by the input parameter to the User.
 void ItemConfigurationData::DisplayItemConfigurationData( const string& itemName )
 {
     map<string, ITEM_ATTRIBUTES_T>::iterator itr = itemConfigurationDataPtr->find( itemName );
@@ -662,6 +696,9 @@ void CheckoutTotal::AddItem( ItemConfigurationData * itemConfigData, const strin
     UpdateCheckoutTotal();
 }
 
+// The <map> that stores the grocery items in the checkout total has only one slot for each unique item.
+// A cummulative quantity and total price are kept for each item type. This function calculates that per
+// item total price (groupPrice).
 unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigData, const string& itemName )
 {
     unsigned int result = 0;
@@ -858,9 +895,7 @@ void CheckoutTotalTest::AddAndReadBackTestOfItemConfiguration( void )
 
     DisplayTestResultsBanner( "Add/Read-Back Test of Item Configuration" );
 
-    // Add the items from the test vector to the configuration.
-    for ( auto itr : ( * itemConfigTestDataVector ) )
-        itemConfigurationData->AddItem( get<0>( itr ), get<1>( itr ), get<2>( itr ) );
+    AddItemConfigTestDataToConfiguration( itemConfigurationData );
 
     // Read back the items in the configuration and compare to the test vector.
     for ( auto itr : ( * itemConfigTestDataVector ) )
@@ -882,48 +917,23 @@ void CheckoutTotalTest::AddAndReadBackTestOfItemConfiguration( void )
     }
 }
 
+// Adds the constant test data in the itemConfigTestDataVector to the itemConfigurationData given by the input parameter.
+void CheckoutTotalTest::AddItemConfigTestDataToConfiguration( ItemConfigurationData * itemConfigurationData )
+{
+    // Add the items from the test vector to the configuration.
+    for ( auto itr : ( * itemConfigTestDataVector ) )
+        itemConfigurationData->AddItem( get<0>( itr ), get<1>( itr ), get<2>( itr ) );
+}
+
 // Adds the constant Special test data in the itemConfigSpecialTestDataVector to the itemConfigurationData.
 // Reads back the data and compares it to the original constant Special test data. This verifies that data
 // can be setup in the configuration object as required.
 void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
 {
-    SPECIAL_ATTRIBUTES_T specialAttributes;
-
-    memset( &specialAttributes, 0, sizeof( SPECIAL_ATTRIBUTES_T ) );
-
     DisplayTestResultsBanner( "Add/Read-Back Test of Item Special Configuration" );
 
-    // Configure the Special test data.
-    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity > >
-    for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
-    {
-        specialAttributes.specialType = get<1>( itr );
-        specialAttributes.limitQuantity = get<5>( itr );
-
-        switch ( get<1>( itr ) )
-        {
-        case SPECIAL_MARK_DOWN:
-            specialAttributes.pctOff = get<4>( itr );
-            break;
-        case SPECIAL_N_FOR_X_DOLLARS:
-            specialAttributes.buyN = get<2>( itr );
-            specialAttributes.priceCentsForN = get<4>( itr );
-            break;
-        case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
-        case SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF:
-            specialAttributes.buyN = get<2>( itr );
-            specialAttributes.getM = get<3>( itr );
-            specialAttributes.pctOff = get<4>( itr );
-            break;
-
-        default:
-            cout << "Special Type not found.";
-            PRINT_FAIL_END;
-            break;
-        }
-
-        ( void ) itemConfigurationData->AddSpecial( get<0>( itr ), specialAttributes );
-    }
+    // Configure the Special test data in itemConfigurationData
+    AddItemConfigSpecialTestDataToConfiguration( itemConfigurationData );
 
     // Read back and verify the Special data.
     // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity> >
@@ -970,6 +980,46 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
     }
 }
 
+// Adds the constant Special test data in the itemConfigSpecialTestDataVector to the itemConfigurationData given by the input parameter.
+void CheckoutTotalTest::AddItemConfigSpecialTestDataToConfiguration( ItemConfigurationData * itemConfigurationData )
+{
+    SPECIAL_ATTRIBUTES_T specialAttributes;
+
+    memset( &specialAttributes, 0, sizeof( SPECIAL_ATTRIBUTES_T ) );
+
+    // Configure the Special test data.
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity > >
+    for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
+    {
+        specialAttributes.specialType = get<1>( itr );
+        specialAttributes.limitQuantity = get<5>( itr );
+
+        switch ( get<1>( itr ) )
+        {
+        case SPECIAL_MARK_DOWN:
+            specialAttributes.pctOff = get<4>( itr );
+            break;
+        case SPECIAL_N_FOR_X_DOLLARS:
+            specialAttributes.buyN = get<2>( itr );
+            specialAttributes.priceCentsForN = get<4>( itr );
+            break;
+        case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+        case SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF:
+            specialAttributes.buyN = get<2>( itr );
+            specialAttributes.getM = get<3>( itr );
+            specialAttributes.pctOff = get<4>( itr );
+            break;
+
+        default:
+            cout << "Special Type not found.";
+            PRINT_FAIL_END;
+            break;
+        }
+
+        ( void ) itemConfigurationData->AddSpecial( get<0>( itr ), specialAttributes );
+    }
+}
+
 void CheckoutTotalTest::CheckoutRunningTotalTest( void )
 {
     checkoutTotal->ClearData();
@@ -987,6 +1037,7 @@ void CheckoutTotalTest::CheckoutRunningTotalTest( void )
     }
 }
 
+// Compares the actual and expected values. Echoes the information to the User, and indicates PASS or FAIL as appropriate.
 bool CheckoutTotalTest::ActualVsExpected( const string& itemName, const string& paramName, unsigned int expected, unsigned int actual )
 {
     bool result = false;
@@ -1347,5 +1398,15 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 121, 0 ) );
 }
 
+// Used to add the constant test data to the configuration specified by the input parameter.
+// This allows a User to load the test data into the main configuration (no need to enter by hand
+// from the command line).
+void CheckoutTotalTest::GetItemConfigTestDataVector( ItemConfigurationData * itemConfigurationData )
+{
+    AddItemConfigTestDataToConfiguration( itemConfigurationData );
+    AddItemConfigSpecialTestDataToConfiguration( itemConfigurationData );
+}
+
 // NOTES:
 // g++ -std=c++11 -Wall -Wextra -pedantic-errors Checkout.cpp -o Checkout
+//
