@@ -31,6 +31,7 @@ typedef enum
     SPECIAL_MARK_DOWN,
     SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF,
     SPECIAL_N_FOR_X_DOLLARS,
+    SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF
 } SPECIAL_TYPE_T;
 
 typedef struct
@@ -330,11 +331,12 @@ void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
         cout << "0) SPECIAL_MARK_DOWN" << endl;
         cout << "1) SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF" << endl;
         cout << "2) SPECIAL_N_FOR_X_DOLLARS" << endl;
-        cout << "Enter 0, 1 or 2: ";
+        cout << "3) SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF" << endl;
+        cout << "Enter 0, 1, 2 or 3: ";
 
         getline( cin >> ws, inBuf1 );
 
-        if ( !ValidateNumericEntryString( inBuf1, &tempInt, 0, 2 ) )
+        if ( !ValidateNumericEntryString( inBuf1, &tempInt, 0, 3 ) )
             INVALID_ENTRY;
         else
         {
@@ -348,13 +350,20 @@ void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
                 else
                     specialAttributes.buyN = tempInt;
 
-                if ( specialAttributes.specialType != SPECIAL_N_FOR_X_DOLLARS )
+                if ( allEntriesAreValid && specialAttributes.specialType != SPECIAL_N_FOR_X_DOLLARS )
                 {
                     // Read getM
-                    if ( allEntriesAreValid &&
-                        !ReadQuantityParam( &tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units, "getM" ) )
+                    if ( !ReadQuantityParam( &tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units, "getM" ) )
                         allEntriesAreValid = false;
-                    else
+                    // Implements the "lesser of" requirement of SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF,
+                    // by ensuring M is always less than or equal to N.
+                    else if ( allEntriesAreValid && specialAttributes.specialType == SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF &&
+                              tempInt > specialAttributes.buyN )
+                    {
+                        cout << endl << "getM must be less than or equal to buyN." << endl;
+                        allEntriesAreValid = false;
+                    }
+                    else if ( allEntriesAreValid )
                         specialAttributes.getM = tempInt;
                 }
             }
@@ -534,6 +543,8 @@ void ItemConfigurationData::DisplayItemConfiguration( map<string, ITEM_ATTRIBUTE
 {
     string buf1, buf2;
 
+    string buf3 = " lesser or equal ";
+
     cout << itr->first << "\t" << CentsToDollarsString( itr->second.priceCents ) \
         << "\t" << ( ( itr->second.units == ITEM_UNITS_EACH ) ? "EACH" : "LB" );
 
@@ -541,15 +552,20 @@ void ItemConfigurationData::DisplayItemConfiguration( map<string, ITEM_ATTRIBUTE
     {
         cout << "\t";
 
+        if ( itr->second.specialAttributesPtr->specialType == SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF )
+            buf3 = " at ";
+
         switch ( itr->second.specialAttributesPtr->specialType )
         {
         case SPECIAL_MARK_DOWN:
             cout << itr->second.specialAttributesPtr->pctOff << "% off";
             break;
         case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+        case SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF:
             cout << "Buy " << GetQuantityString( itr->second.specialAttributesPtr->buyN, itr->second.units, buf1 ) \
                 << " Get " << GetQuantityString( itr->second.specialAttributesPtr->getM, itr->second.units, buf2 ) \
-                << " at " << itr->second.specialAttributesPtr->pctOff << "% off";
+                << buf3 << itr->second.specialAttributesPtr->pctOff << "% off";
+            break;
         case SPECIAL_N_FOR_X_DOLLARS:
             cout << GetQuantityString( itr->second.specialAttributesPtr->buyN, itr->second.units, buf1 ) << " for " \
                  << CentsToDollarsString( itr->second.specialAttributesPtr->priceCentsForN );
@@ -641,6 +657,7 @@ unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigDat
                                                tempItemAttributes.specialAttributesPtr->pctOff, unitsDivider );
             break;
         case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+        case SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF:
             result += Apply_BuyN_GetM_At_X_PctOff( tempItemAttributes, groupQuantity, unitsDivider );
             break;
         case SPECIAL_N_FOR_X_DOLLARS:
@@ -855,6 +872,7 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
             specialAttributes.priceCentsForN = get<4>( itr );
             break;
         case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+        case SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF:
             specialAttributes.buyN = get<2>( itr );
             specialAttributes.getM = get<3>( itr );
             specialAttributes.pctOff = get<4>( itr );
@@ -900,6 +918,7 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
                     break;
                 case SPECIAL_MARK_DOWN:
                 case SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF:
+                case SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF:
                     ( void ) ActualVsExpected( get<0>( itr ), "pctOff", get<4>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->pctOff );
                     break;
                 default:
@@ -966,6 +985,7 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     itemConfigTestDataVector->push_back( make_tuple( "Ground Beef", ITEM_UNITS_WEIGHT, 499 ) );
     // Items with specials assigned.
     itemConfigTestDataVector->push_back( make_tuple( "Whole Grain Bread", ITEM_UNITS_EACH, 249 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Deli Turkey", ITEM_UNITS_WEIGHT, 599 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Walnuts", ITEM_UNITS_EACH, 597 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Pears", ITEM_UNITS_WEIGHT, 129 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Blueberries (pint)", ITEM_UNITS_EACH, 399 ) );
@@ -988,6 +1008,9 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, weighted and unweighted items.
     itemConfigSpecialTestDataVector->push_back( make_tuple( "Whole Grain Bread", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 1, 1, 100 ) );
     itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 200, 100, 25 ) );
+
+    // SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, weighted items only.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Turkey", SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, 200, 100, 50 ) );
 
 
     ///////////////////////////////////////////////////////////////////////////
@@ -1079,6 +1102,28 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // Price for new total = 1.53 * 199 = 304
     checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 418, 304 ) );
     checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 153, 0 ) );
+
+    // Test SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF items.
+
+    // Reglar price: 5.99 / lb
+    // Discount price = 5.99 * 0.50 = 2.99 / lb
+    //
+    // x < 200
+    // Price for new total = 1.87 * 5.99 * 100 = 608
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", true, 187, 1120 ) );
+    // 200 < x < 300
+    // Price for new total =  2.0 * 599 + (1.87 + 0.63 - 2.0) * 299 = 1198 + 149 = 1347
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", true, 63, 1347 ) );
+    // 300 < x < 500
+    // Price for new total =  2.0 * 599 + 1.0 * 299 + (1.87 + 0.63 + 2.11 - 3.0) * 599 = 1198 + 299 + 964 = 2461
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", true, 211, 2461 ) );
+    // 500 < x < 600
+    // Price for new total =  4.0 * 599 + 1.0 * 299 + (1.87 + 0.63 + 2.11 + 1.3 - 5.0) * 299 = 2396 + 299 + 272 = 2967
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", true, 130, 2967 ) );
+    // 600 < x < 800
+    // Price for new total =  4.0 * 599 + 2.0 * 299 + (1.87 + 0.63 + 2.11 + 1.3 + 0.33 - 6.0) * 599 = 2396 + 598 + 143 = 3137
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", true, 33, 3137 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", false, 624, 0 ) );
 
 }
 
