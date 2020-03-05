@@ -39,6 +39,7 @@ typedef struct
     SPECIAL_TYPE_T specialType;
     unsigned int buyN;
     unsigned int getM;
+    unsigned int limitQuantity;
 
     union
     {
@@ -145,8 +146,8 @@ private:
     // vector< tuple< itemName, units, priceCents > >
     vector< tuple <string, ITEM_UNITS_T, unsigned int> > * itemConfigTestDataVector;
 
-    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN > >
-    vector< tuple <string, SPECIAL_TYPE_T, unsigned int, unsigned int, unsigned int> > * itemConfigSpecialTestDataVector;
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity > >
+    vector< tuple <string, SPECIAL_TYPE_T, unsigned int, unsigned int, unsigned int, unsigned int> > * itemConfigSpecialTestDataVector;
 
     // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
     vector< tuple <string, bool, unsigned int, unsigned int> > * checkoutTotalTestDataVector;
@@ -368,6 +369,7 @@ void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
                 }
             }
 
+            // Read pctOff.
             if ( allEntriesAreValid && specialAttributes.specialType != SPECIAL_N_FOR_X_DOLLARS )
             {
                 cout << "Enter pctOff (1 - 100): ";
@@ -378,6 +380,7 @@ void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
                     specialAttributes.pctOff = tempInt;
             }
 
+            // Read priceCentsForN.
             if ( allEntriesAreValid && specialAttributes.specialType == SPECIAL_N_FOR_X_DOLLARS )
             {
                 if ( !ReadPriceParam( &tempInt, inBuf1, "priceCentsForN" ) )
@@ -386,6 +389,27 @@ void ReadSpecialConfiguration( ItemConfigurationData * itemConfigurationData )
                     specialAttributes.priceCentsForN = tempInt;
             }
 
+            specialAttributes.limitQuantity = 0;
+
+            // Read limitQuantity.
+            if ( allEntriesAreValid )
+            {
+                cout << "Does this Special have a limit quantity? Enter 1 for Yes, 2 for No.: ";
+                getline( cin >> ws, inBuf1 );
+                if ( !ValidateNumericEntryString( inBuf1, &tempInt, 1, 2 ) )
+                    allEntriesAreValid = false;
+                else if ( tempInt == 1 )
+                {
+                    // Read Limit
+                    if ( !ReadQuantityParam( &tempInt, itemConfigurationData->GetItemAttributes( string( itemName ) ).units,
+                                             "Limit", specialAttributes.buyN + specialAttributes.getM ) )
+                        allEntriesAreValid = false;
+                    else
+                        specialAttributes.limitQuantity = tempInt;
+                }
+            }
+
+            // If everything went OK, add the special to the configuration data.
             if ( !allEntriesAreValid )
                 INVALID_ENTRY;
             else if ( !itemConfigurationData->AddSpecial( string( itemName ), specialAttributes ) )
@@ -573,6 +597,9 @@ void ItemConfigurationData::DisplayItemConfiguration( map<string, ITEM_ATTRIBUTE
         default:
             break;
         }
+
+        if ( itr->second.specialAttributesPtr->limitQuantity > 0 )
+            cout << " limit " << GetQuantityString( itr->second.specialAttributesPtr->limitQuantity, itr->second.units, buf1 );
     }
 
     cout << endl;
@@ -592,6 +619,7 @@ string& ItemConfigurationData::GetQuantityString( unsigned int quantity, ITEM_UN
 
     return resultStr;
 }
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //                        CheckoutTotal Class                                //
@@ -650,6 +678,15 @@ unsigned int CheckoutTotal::GetGroupPrice( ItemConfigurationData * itemConfigDat
     // If there is a Special associated with this item.
     if ( tempItemAttributes.specialAttributesPtr != nullptr )
     {
+        // If a limit applies, and the limit is exceeded, apply the regular price to the excess quantity.
+        if ( tempItemAttributes.specialAttributesPtr->limitQuantity > 0
+            && groupQuantity > tempItemAttributes.specialAttributesPtr->limitQuantity )
+        {
+            result += ( groupQuantity - tempItemAttributes.specialAttributesPtr->limitQuantity ) * tempItemAttributes.priceCents;
+            result /= unitsDivider;
+            groupQuantity -= groupQuantity - tempItemAttributes.specialAttributesPtr->limitQuantity;
+        }
+
         switch ( tempItemAttributes.specialAttributesPtr->specialType )
         {
         case SPECIAL_MARK_DOWN:
@@ -778,8 +815,8 @@ CheckoutTotalTest::CheckoutTotalTest():
     // vector< tuple< itemName, units, priceCents > >
     itemConfigTestDataVector = new vector< tuple <string, ITEM_UNITS_T, unsigned int> >;
 
-    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN > >
-    itemConfigSpecialTestDataVector = new vector< tuple <string, SPECIAL_TYPE_T, unsigned int, unsigned int, unsigned int> >;
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity > >
+    itemConfigSpecialTestDataVector = new vector< tuple <string, SPECIAL_TYPE_T, unsigned int, unsigned int, unsigned int, unsigned int> >;
 
     // vector< tuple< itemName, add (remove), quantity, checkoutTotal > >
     checkoutTotalTestDataVector = new vector< tuple <string, bool, unsigned int, unsigned int> >;
@@ -857,10 +894,11 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
     DisplayTestResultsBanner( "Add/Read-Back Test of Item Special Configuration" );
 
     // Configure the Special test data.
-    // vector< tuple< itemName, specialType, buyN, getM, pctOff > >
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity > >
     for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
     {
         specialAttributes.specialType = get<1>( itr );
+        specialAttributes.limitQuantity = get<5>( itr );
 
         switch ( get<1>( itr ) )
         {
@@ -888,7 +926,7 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
     }
 
     // Read back and verify the Special data.
-    // vector< tuple< itemName, specialType, pctOff> >
+    // vector< tuple< itemName, specialType, buyN, getM, pctOff OR priceCentsForN, limitQuantity> >
     for ( auto itr : ( * itemConfigSpecialTestDataVector ) )
     {
         cout << get<0>( itr ) << " Special";
@@ -910,6 +948,7 @@ void CheckoutTotalTest::AddAndReadBackTestOfSpecialConfiguration( void )
             {
                 ( void ) ActualVsExpected( get<0>( itr ), "buyN", get<2>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->buyN );
                 ( void ) ActualVsExpected( get<0>( itr ), "getM", get<3>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->getM );
+                ( void ) ActualVsExpected( get<0>( itr ), "limitQuantity", get<5>( itr ), itemConfigurationData->GetItemAttributes( get<0>( itr ) ).specialAttributesPtr->limitQuantity );
 
                 switch ( get<1>( itr ) )
                 {
@@ -981,36 +1020,49 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // add/read-back test.
 
     // Items without specials assigned.
+    itemConfigTestDataVector->push_back( make_tuple( "Minestrone Soup", ITEM_UNITS_EACH, 98 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Corn Flakes", ITEM_UNITS_EACH, 298 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Ground Beef", ITEM_UNITS_WEIGHT, 499 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Chicken Breasts", ITEM_UNITS_WEIGHT, 598 ) );
     // Items with specials assigned.
     itemConfigTestDataVector->push_back( make_tuple( "Whole Grain Bread", ITEM_UNITS_EACH, 249 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Bananas", ITEM_UNITS_WEIGHT, 99 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Corn Chips", ITEM_UNITS_EACH, 349 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Tomatoes", ITEM_UNITS_WEIGHT, 89 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "White Rice", ITEM_UNITS_EACH, 149 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Deli Turkey", ITEM_UNITS_WEIGHT, 599 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Walnuts", ITEM_UNITS_EACH, 597 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Pears", ITEM_UNITS_WEIGHT, 129 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Blueberries (pint)", ITEM_UNITS_EACH, 399 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Russet Potatoes", ITEM_UNITS_WEIGHT, 79 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Salmon", ITEM_UNITS_WEIGHT, 897 ) );
     itemConfigTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", ITEM_UNITS_WEIGHT, 199 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Tilapia", ITEM_UNITS_WEIGHT, 699 ) );
+    itemConfigTestDataVector->push_back( make_tuple( "Cantaloupe", ITEM_UNITS_EACH, 298 ) );
 
 
     ///////////////////////////////////////////////////////////////////////////
     // Initialize vector used to store test data for Item Special Configuration
     // add/read-back test.
 
-    // SPECIAL_MARK_DOWN, weighted and unweighted items.
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Walnuts", SPECIAL_MARK_DOWN, 0, 0, 25 ) );
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Pears", SPECIAL_MARK_DOWN, 0, 0, 15 ) );
-
-    // SPECIAL_N_FOR_X_DOLLARS, weighted and unweighted items.
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Blueberries (pint)", SPECIAL_N_FOR_X_DOLLARS, 2, 0, 500 ) );
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Russet Potatoes", SPECIAL_N_FOR_X_DOLLARS, 100, 0, 59 ) );
-
-    // SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, weighted and unweighted items.
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Whole Grain Bread", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 1, 1, 100 ) );
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 200, 100, 25 ) );
-
-    // SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, weighted items only.
-    itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Turkey", SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, 200, 100, 50 ) );
+    // SPECIAL_MARK_DOWN, weighted and unweighted items, with and without limits.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Walnuts", SPECIAL_MARK_DOWN, 0, 0, 25, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Pears", SPECIAL_MARK_DOWN, 0, 0, 15, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "White Rice", SPECIAL_MARK_DOWN, 0, 0, 30, 2 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Bananas", SPECIAL_MARK_DOWN, 0, 0, 20, 500 ) );
+    // SPECIAL_N_FOR_X_DOLLARS, weighted and unweighted items, with and without limits.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Blueberries (pint)", SPECIAL_N_FOR_X_DOLLARS, 2, 0, 500, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Russet Potatoes", SPECIAL_N_FOR_X_DOLLARS, 100, 0, 59, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Corn Chips", SPECIAL_N_FOR_X_DOLLARS, 3, 0, 700, 6 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Salmon", SPECIAL_N_FOR_X_DOLLARS, 200, 0, 1299, 200 ) );
+    // SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, weighted and unweighted items, with and without limits.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Whole Grain Bread", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 1, 1, 100, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 200, 100, 25, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Cantaloupe", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 1, 2, 40, 6 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Tilapia", SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF, 100, 100, 50, 400 ) );
+    // SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, weighted items only, with and without limits.
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Deli Turkey", SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, 200, 100, 50, 0 ) );
+    itemConfigSpecialTestDataVector->push_back( make_tuple( "Tomatoes", SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF, 200, 100, 50, 600 ) );
 
 
     ///////////////////////////////////////////////////////////////////////////
@@ -1050,6 +1102,47 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 167, 131 ) );
     checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 121, 0 ) );
 
+    // Regular price  = 1.49
+    // Discount price = 1.49 * 0.70 = 1.04
+    // x < 2
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", true, 1, 104 ) );
+    // x = 2
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", true, 1, 208 ) );
+    // x > 2, regular price
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", true, 1, 357 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", true, 1, 506 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", false, 1, 357 ) );
+    // x = 2
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", false, 1, 208 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", false, 1, 104 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "White Rice", false, 1, 0 ) );
+
+    // Regular price  = 0.99
+    // Discount price = 0.99 * 0.80 = 0.79 (limit 5 lb)
+    // 
+    // x < 500
+    //  New total = 0.56 * 79 = 44
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", true, 56, 44 ) );
+    // x < 500
+    //  New total = (0.56 + 4.23) * 79 = 378
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", true, 423, 378 ) );
+    // x > 500
+    //  New total = 5.0 * 79 + (0.56 + 4.23 + 1.72 - 5.0) * 99 = 395 + 149 = 544
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", true, 172, 544 ) );
+    // x > 500
+    //  New total = 5.0 * 79 + (0.56 + 4.23 + 1.72 + 2.23 - 5.0) * 99 = 395 + 370 = 765
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", true, 223, 765 ) );
+    // x < 500
+    // New total = (0.56 + 1.72 + 2.23) * 79 = 356
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", false, 423, 356 ) );
+    // x < 500
+    // New total = (1.72 + 2.23) * 79 = 312
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", false, 56, 312 ) );
+    // x < 500
+   // New total = (1.72) * 79 = 135
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", false, 223, 135 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", false, 172, 0 ) );
+
     // Test SPECIAL_N_FOR_X_DOLLARS items.
 
     checkoutTotalTestDataVector->push_back( make_tuple( "Blueberries (pint)", true, 1, 250 ) );
@@ -1070,6 +1163,38 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     // Price for new total = 1.33 * 59 = 78
     checkoutTotalTestDataVector->push_back( make_tuple( "Russet Potatoes", false, 91, 78 ) );
     checkoutTotalTestDataVector->push_back( make_tuple( "Russet Potatoes", false, 133, 0 ) );
+
+    // Price for new total = (1 * 700)/3 = 233
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", true, 1, 233 ) );
+    // Price for new total = (2 * 700)/3 = 466
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", true, 1, 466 ) );
+    // Price for new total = (3 * 700)/3 = 700
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", true, 1, 700 ) );
+    // Price for new total = (6 * 700)/3 = 1400
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", true, 3, 1400 ) );
+    // Limit exceeded here.
+    // Price for new total = 1400 + 2 * 349 = 2098
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", true, 2, 2098 ) );
+    // Price for new total = 1400 + 349 = 1749
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", false, 1, 1749 ) );
+    // Limit crossed here
+    // Price for new total = (5 * 700)/3 = 1166
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", false, 2, 1166 ) );
+    // Price for new total = (4 * 700)/3 = 933
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", false, 1, 933 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Chips", false, 4, 0 ) );
+
+    // Price for new total = (1.27 * 1299)/2 = 824
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", true, 127, 824 ) );
+    // Limit passed here.
+    // Price for new total = (2.0 * 1299)/2 + (1.27 + 1.13 -2) * 897 = 1299 + 358 = 1657
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", true, 113, 1657 ) );
+    // Price for new total = (2.0 * 1299)/2 + (1.27 + 1.13 + 1.7 -2) * 897 = 1299 + 1883 = 3182
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", true, 170, 3182 ) );
+    // Limit passed here.
+    // Price for new total = (1.7 * 1299)/2 = 1104
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", false, 240, 1104 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", false, 170, 0 ) );
 
     // Test SPECIAL_BUY_N_GET_M_AT_X_PCT_OFF items.
 
@@ -1103,6 +1228,45 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 418, 304 ) );
     checkoutTotalTestDataVector->push_back( make_tuple( "Deli Cheddar Cheese", false, 153, 0 ) );
 
+    // Regular price 2.98 EA
+    // Discount price = 2.98 * 0.6 = 1.78
+    //
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 298 ) );
+    // 298 + 178 = 476
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 476 ) );
+    // 298 + 2 * 178 = 654
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 654 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 952 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 1130 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 1308 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", true, 1, 1606 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", false, 3, 952 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", false, 2, 476 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Cantaloupe", false, 2, 0 ) );
+
+    // Reglar price: 6.99 / lb
+    // Discount price = 6.99 * 0.50 = 3.49 / lb
+    //
+    // x < 100
+    // Price for new total = 0.87 * 699 = 608
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", true, 87, 608 ) );
+    // 100 < x < 200
+    // Price for new total =  1.0 * 699 + ( 0.87 + 0.55 - 1.0) * 349 = 699 + 146 = 854
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", true, 55, 845 ) );
+    // 200 < x < 300
+    // Price for new total =  1.0 * 699 + 1.0 * 349 + ( 0.87 + 0.55 + 1.05 - 2.0) * 699 =  699 + 349 + 328 = 1376
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", true, 105, 1376 ) );
+    // 300 < x < 400
+    // Price for new total =  2.0 * 699 + 1.0 * 349 + ( 0.87 + 0.55 + 1.05 + 1.21 - 3.0) * 349 =  1398 + 349 + 237 = 1984
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", true, 121, 1984 ) );
+    // 200 < x < 300
+    // Price for new total =  1.0 * 699 + 1.0 * 349 + ( 0.87 + 1.21 - 2.0) * 699 =  699 + 349 + 55 = 1103
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", false, 160, 1103 ) );
+    // 100 < x < 200
+    // Price for new total =  1.0 * 699 + ( 1.21 - 1.0) * 349 = 699 + 73 = 772
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", false, 87, 772 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", false, 121, 0 ) );
+
     // Test SPECIAL_BUY_N_GET_M_OF_EQUAL_OR_LESSER_VALUE_FOR_X_PCT_OFF items.
 
     // Reglar price: 5.99 / lb
@@ -1125,6 +1289,62 @@ void CheckoutTotalTest::InitializeTestDataVectors( void )
     checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", true, 33, 3137 ) );
     checkoutTotalTestDataVector->push_back( make_tuple( "Deli Turkey", false, 624, 0 ) );
 
+    // Reglar price: 0.89 / lb
+    // Discount price = 0.89 * 0.50 = 0.44 / lb
+    //
+    // 500 < x < 600
+    // Price for new total =  4.0 * 89 + 1.0 * 44 + (5.57 - 5.0) * 44 = 356 + 44 + 25 = 425
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tomatoes", true, 557, 425 ) );
+    // 600 < x < 800
+    // Price for new total =  4.0 * 89 + 2.0 * 44 + (5.57 + 2.25 - 6.0) * 89 = 356 + 88 + 161 = 605
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tomatoes", true, 225, 605 ) );
+    // 800 < x < 900
+    // Price for new total =  4.0 * 89 + 2.0 * 44 + (5.57 + 2.25 + 0.5 - 6.0) * 89 = 356 + 88 + 206 = 650
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tomatoes", true, 50, 650 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tomatoes", false, 832, 0 ) );
+
+    // Test a mix of special and non-special items.
+
+    checkoutTotalTestDataVector->push_back( make_tuple( "Minestrone Soup", true, 1, 98 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", true, 200, 1096 ) ); // 998
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", true, 1, 1543 ) ); // 447 
+    // (1.21) * 109 = 131
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", true, 121, 1674 ) );
+    // x > 5000
+    //  New total = 5.0 * 79 + (6.51 - 5.0) * 99 = 395 + 149 = 544
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", true, 651, 2218 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", true, 1, 2516 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Blueberries (pint)", true, 3, 3266 ) ); // 750
+    // 1299 + 1.3 * 897 = 2465
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", true, 330, 5731 ) );
+    // 1.24 * 598 = 741
+    checkoutTotalTestDataVector->push_back( make_tuple( "Chicken Breasts", true, 124, 6472 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", true, 1, 6770 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", true, 2, 7019 ) ); // 249
+    // 1000 < x < 2000
+    // Price for new total =  1.0 * 699 + ( 1.42 - 1.0) * 349 = 699 + 146 = 845
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", true, 142, 7864 ) );
+    // 5000 < x < 6000
+    // Price for new total =  4.0 * 89 + 1.0 * 44 + (5.57 - 5.0) * 44 = 356 + 44 + 25 = 425
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tomatoes", true, 557, 8289 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Minestrone Soup", true, 1, 8387 ) );
+
+    checkoutTotalTestDataVector->push_back( make_tuple( "Blueberries (pint)", false, 1, 8137 ) ); // 750
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", false, 1, 8137 ) ); // 249
+    checkoutTotalTestDataVector->push_back( make_tuple( "Whole Grain Bread", false, 1, 7888 ) ); // 249
+    checkoutTotalTestDataVector->push_back( make_tuple( "Blueberries (pint)", false, 2, 7388 ) ); // 750
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tomatoes", false, 557, 6963 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Tilapia", false, 142, 6118 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Minestrone Soup", false, 1, 6020 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 5722 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Minestrone Soup", false, 1, 5624 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Corn Flakes", false, 1, 5326 ) ); // 298
+    checkoutTotalTestDataVector->push_back( make_tuple( "Chicken Breasts", false, 124, 4585 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Ground Beef", false, 200, 3587 ) ); // 998
+    checkoutTotalTestDataVector->push_back( make_tuple( "Salmon", false, 330, 1122 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Walnuts", false, 1, 675 ) ); // 447
+    checkoutTotalTestDataVector->push_back( make_tuple( "Bananas", false, 651, 131 ) );
+    checkoutTotalTestDataVector->push_back( make_tuple( "Pears", false, 121, 0 ) );
 }
 
 // NOTES:
