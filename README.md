@@ -43,7 +43,9 @@ clearcheckout – (Clear Checkout) Clear the items in the checkout total.
 
 rt – (Run Tests) Run the embedded tests.  
 
-loadtestconfig – (Load Test Configuration) Load the constant configuration data in the test vectors to the main configuration object. This allows a configuration to be setup without having to configure every item from the command line.
+loadtestconfig – (Load Test Configuration) Load the constant configuration data in the test vectors to the main configuration object. This allows a configuration to be setup without having to configure every item from the command line.  
+
+quit - (Quit) Exit the program.
 
 ### NOTES ###
 
